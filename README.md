@@ -260,7 +260,7 @@ TriggerFreeze/
 - [Shizuku](https://github.com/RikkaApps/Shizuku) — 提供普通应用调用系统 API 的能力
 - [Jetpack Compose](https://developer.android.com/compose) — 现代化 Android UI 工具包
 - [Material Design 3](https://m3.material.io/) — 设计语言和组件库
-- [NoShake](https://gitee.com/xiao-lus-studio_0/no-shake) — 本项目的灵感来源，一个优秀的跳转拦截工具
+- [NoShake](https://gitee.com/xiao-lus-studio_0/no-shake) — 本项目的灵感来源，一个用来对抗"摇一摇广告"的 Android 工具
 
 ---
 
