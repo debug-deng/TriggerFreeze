@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">TriggerFreeze</string>
+    <string name="channel_name">TriggerFreeze 监控服务</string>
+    <string name="channel_description">用于监控前台应用变化以自动冻结干扰应用</string>
+</resources>
