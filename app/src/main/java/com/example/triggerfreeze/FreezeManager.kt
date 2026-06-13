@@ -14,11 +14,14 @@ object FreezeManager {
     }
 
     suspend fun suspendPackage(packageName: String, triggerPackage: String? = null): CommandResult {
+        val t = System.currentTimeMillis()
         val command = "pm suspend ${shellQuote(packageName)}"
         val result = ShizukuExecutor.run(command)
+        val elapsed = System.currentTimeMillis() - t
         if (result.isSuccess) {
             frozenSet.add(packageName)
         }
+        RuntimeLog.timing("suspendPackage($packageName)", elapsed)
         TriggerLogger.add(
             type = if (result.isSuccess) TriggerLogEntry.Type.FREEZE else TriggerLogEntry.Type.ERROR,
             triggerPackage = triggerPackage,
@@ -30,11 +33,14 @@ object FreezeManager {
     }
 
     suspend fun unsuspendPackage(packageName: String, triggerPackage: String? = null): CommandResult {
+        val t = System.currentTimeMillis()
         val command = "pm unsuspend ${shellQuote(packageName)}"
         val result = ShizukuExecutor.run(command)
+        val elapsed = System.currentTimeMillis() - t
         if (result.isSuccess) {
             frozenSet.remove(packageName)
         }
+        RuntimeLog.timing("unsuspendPackage($packageName)", elapsed)
         TriggerLogger.add(
             type = if (result.isSuccess) TriggerLogEntry.Type.UNFREEZE else TriggerLogEntry.Type.ERROR,
             triggerPackage = triggerPackage,

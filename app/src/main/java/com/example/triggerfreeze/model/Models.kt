@@ -14,7 +14,7 @@ data class TriggerLogEntry(
     val success: Boolean,
     val detail: String
 ) {
-    enum class Type { TRIGGER, FREEZE, UNFREEZE, ERROR }
+    enum class Type { TRIGGER, FREEZE, UNFREEZE, ERROR, SYSTEM }
 }
 
 data class FreezeRule(

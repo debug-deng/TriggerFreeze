@@ -92,6 +92,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -205,6 +206,7 @@ private fun TriggerFreezeContent() {
     var editingTriggerPkg by remember { mutableStateOf<String?>(null) }
     var showLogs by remember { mutableStateOf(false) }
     var showTriggerLogs by remember { mutableStateOf(false) }
+    var showRuntimeLogs by remember { mutableStateOf(false) }
 
     fun loadApps(forceRefresh: Boolean = false) {
         scope.launch {
@@ -474,6 +476,7 @@ private fun TriggerFreezeContent() {
                             forceStopAction = v
                         },
                         onShowTriggerLogs = { showTriggerLogs = true },
+                        onShowRuntimeLogs = { showRuntimeLogs = true },
                         onBack = { screen = Screen.Main }
                     )
                 }
@@ -569,6 +572,62 @@ private fun TriggerFreezeContent() {
             }
         )
     }
+
+    if (showRuntimeLogs) {
+        RuntimeLogDialog(
+            logs = RuntimeLog.all,
+            onDismiss = { showRuntimeLogs = false },
+            onClear = {
+                RuntimeLog.clear()
+                showRuntimeLogs = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun RuntimeLogDialog(
+    logs: List<String>,
+    onDismiss: () -> Unit,
+    onClear: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("运行日志") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "共 ${logs.size} 条记录 · 用于诊断发热/性能问题",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                if (logs.isEmpty()) {
+                    Text("暂无日志，启动监控服务后会自动记录")
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(360.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            text = logs.joinToString("\n"),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 9.sp
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onClear) { Text("清空") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
 }
 
 @Composable
@@ -599,12 +658,14 @@ private fun TriggerLogDialog(
                                 TriggerLogEntry.Type.FREEZE -> MaterialTheme.colorScheme.error
                                 TriggerLogEntry.Type.UNFREEZE -> MaterialTheme.colorScheme.tertiary
                                 TriggerLogEntry.Type.ERROR -> MaterialTheme.colorScheme.error
+                                TriggerLogEntry.Type.SYSTEM -> MaterialTheme.colorScheme.onSurfaceVariant
                             }
                             val label = when (entry.type) {
                                 TriggerLogEntry.Type.TRIGGER -> "▶ 触发"
                                 TriggerLogEntry.Type.FREEZE -> "❄ 冻结"
                                 TriggerLogEntry.Type.UNFREEZE -> "▶ 解冻"
                                 TriggerLogEntry.Type.ERROR -> "⚠ 错误"
+                                TriggerLogEntry.Type.SYSTEM -> "ℹ 系统"
                             }
                             val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
                                 .format(java.util.Date(entry.timestamp))
@@ -1067,6 +1128,7 @@ private fun SettingsScreen(
     forceStopAction: Int,
     onForceStopActionChange: (Int) -> Unit,
     onShowTriggerLogs: () -> Unit,
+    onShowRuntimeLogs: () -> Unit,
     onBack: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -1103,6 +1165,14 @@ private fun SettingsScreen(
                                     Icon(Icons.Filled.BugReport, contentDescription = null)
                                 },
                                 label = { Text("触发日志") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            AssistChip(
+                                onClick = onShowRuntimeLogs,
+                                leadingIcon = {
+                                    Icon(Icons.Filled.Settings, contentDescription = null)
+                                },
+                                label = { Text("运行日志") },
                                 modifier = Modifier.weight(1f)
                             )
                         }

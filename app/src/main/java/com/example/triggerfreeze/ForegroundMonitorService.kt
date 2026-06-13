@@ -33,6 +33,10 @@ class ForegroundMonitorService : Service() {
     private val pendingUnfreeze = mutableMapOf<String, Long>()
     private var logcatProcess: Process? = null
     private var logcatJob: Job? = null
+    private var pollCount = 0
+    private var lastPollTime = 0L
+    private var totalPollTime = 0L
+    private var consecutiveSameForeground = 0
     private val blockedAttemptTracker = BlockedAttemptTracker { pkg ->
         scope.launch {
             val action = prefs.getFrequentCallAction()
@@ -65,21 +69,29 @@ class ForegroundMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        RuntimeLog.d("服务已创建")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         isServiceRunning = true
+        pollCount = 0
+        totalPollTime = 0L
+        RuntimeLog.d("服务启动中...")
         val notification = buildNotification()
         startForeground(NOTIFICATION_ID, notification)
         if (intent?.getBooleanExtra(EXTRA_SYNC, false) == true) {
             scope.launch {
+                RuntimeLog.d("开始同步已冻结状态")
                 FreezeManager.clearFrozenCache()
                 val suspended = FreezeManager.getSuspendedPackages()
                 suspended.forEach { FreezeManager.markFrozen(it) }
+                RuntimeLog.d("同步完成：${suspended.size} 个应用已冻结")
             }
         }
         handler.post(monitorRunnable)
+        RuntimeLog.d("监控轮询已启动，间隔 ${POLL_INTERVAL_MS}ms")
         if (prefs.isForceStopEnabled()) {
+            RuntimeLog.d("频繁调用防护已开启，启动 logcat 监听")
             startLogcatMonitor()
         }
         return START_STICKY
@@ -88,10 +100,12 @@ class ForegroundMonitorService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        RuntimeLog.d("服务销毁中... 总轮询次数=$pollCount 平均耗时=${if (pollCount > 0) totalPollTime / pollCount else 0}ms")
         isServiceRunning = false
         handler.removeCallbacks(monitorRunnable)
         stopLogcatMonitor()
         scope.launch {
+            RuntimeLog.d("开始解冻所有规则目标应用")
             val allFrozen = FreezeManager.getSuspendedPackages()
             val rules = prefs.getAllRules().filter { it.isEnabled }
             val ruleTargets = rules.flatMap { it.frozenPackages }.toSet()
@@ -100,6 +114,7 @@ class ForegroundMonitorService : Service() {
                     FreezeManager.unsuspendPackage(pkg)
                 }
             }
+            RuntimeLog.d("服务销毁：解冻完成")
         }
         super.onDestroy()
     }
@@ -107,8 +122,12 @@ class ForegroundMonitorService : Service() {
     private fun pollForegroundApp() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return
 
+        pollCount++
+        val tick = System.currentTimeMillis()
+
         val foreground = runCatching { getForegroundPackage() }
             .onFailure { e ->
+                RuntimeLog.e("获取前台应用失败: ${e.message}")
                 TriggerLogger.add(
                     type = TriggerLogEntry.Type.ERROR,
                     triggerPackage = null,
@@ -119,9 +138,23 @@ class ForegroundMonitorService : Service() {
             }
             .getOrNull() ?: return
 
-        if (foreground != currentForeground) {
-            currentForeground = foreground
+        val elapsed = System.currentTimeMillis() - tick
+        totalPollTime += elapsed
+        if (elapsed > 100) {
+            RuntimeLog.w("第${pollCount}次轮询 getForegroundPackage() 耗时 ${elapsed}ms")
         }
+
+        if (foreground == currentForeground) {
+            consecutiveSameForeground++
+            if (consecutiveSameForeground % 100 == 0) {
+                RuntimeLog.d("第${pollCount}次轮询: 前台=${foreground}（连续${consecutiveSameForeground}次未变）平均轮询耗时=${totalPollTime / pollCount}ms")
+            }
+            return // 前台未变，跳过规则处理
+        }
+
+        RuntimeLog.d("前台应用变化: ${currentForeground ?: "null"} → $foreground (第${pollCount}次轮询)")
+        consecutiveSameForeground = 0
+        currentForeground = foreground
 
         val rules = prefs.getAllRules().filter { it.isEnabled }
         scope.launch {
@@ -130,12 +163,14 @@ class ForegroundMonitorService : Service() {
     }
 
     private suspend fun applyRules(foregroundPackage: String, rules: List<FreezeRule>) {
+        val t0 = System.currentTimeMillis()
         val activeRule = rules.find { it.triggerPackage == foregroundPackage }
 
         val shouldBeFrozen = activeRule?.frozenPackages ?: emptySet()
         val allRuleTargets = rules.flatMap { it.frozenPackages }.toSet()
 
         if (activeRule != null) {
+            RuntimeLog.d("规则命中: $foregroundPackage → 冻结 ${shouldBeFrozen.size} 个应用")
             TriggerLogger.add(
                 type = TriggerLogEntry.Type.TRIGGER,
                 triggerPackage = foregroundPackage,
@@ -157,8 +192,14 @@ class ForegroundMonitorService : Service() {
         }
 
         // 冻结：每次轮询都执行，防止缓存与系统状态不一致导致漏冻结
+        if (shouldBeFrozen.isNotEmpty()) {
+            RuntimeLog.d("开始冻结 ${shouldBeFrozen.size} 个应用...")
+        }
         for (pkg in shouldBeFrozen) {
+            val t = System.currentTimeMillis()
             FreezeManager.suspendPackage(pkg, triggerPackage = foregroundPackage)
+            val dt = System.currentTimeMillis() - t
+            if (dt > 500) RuntimeLog.w("suspendPackage($pkg) 耗时 ${dt}ms")
         }
 
         // 解冻：延迟 5 秒执行，防止快速切回触发应用时出现空隙
@@ -171,41 +212,62 @@ class ForegroundMonitorService : Service() {
                 }
             }
             // 解冻超过延迟时间的包
+            var unfrozenCount = 0
             for (pkg in allRuleTargets) {
                 val queuedSince = pendingUnfreeze[pkg] ?: continue
                 if (now - queuedSince >= UNFREEZE_DELAY_MS) {
+                    val t = System.currentTimeMillis()
                     FreezeManager.unsuspendPackage(pkg, triggerPackage = foregroundPackage)
+                    val dt = System.currentTimeMillis() - t
+                    if (dt > 500) RuntimeLog.w("unsuspendPackage($pkg) 耗时 ${dt}ms")
                     pendingUnfreeze.remove(pkg)
+                    unfrozenCount++
                 }
+            }
+            if (unfrozenCount > 0) {
+                RuntimeLog.d("解冻 $unfrozenCount 个应用")
             }
         } else {
             // 正在触发规则 → 清除所有待解冻
             pendingUnfreeze.clear()
         }
+
+        val totalElapsed = System.currentTimeMillis() - t0
+        if (totalElapsed > 200) {
+            RuntimeLog.w("applyRules() 总耗时 ${totalElapsed}ms (foreground=$foregroundPackage)")
+        }
     }
 
     private fun startLogcatMonitor() {
+        RuntimeLog.d("启动 logcat 监听...")
         logcatJob = scope.launch {
             while (isServiceRunning) {
                 try {
+                    RuntimeLog.d("创建 logcat 进程...")
+                    val t = System.currentTimeMillis()
                     val proc = ShizukuExecutor.startLongRunning(
                         "logcat -s ActivityManager:* --regex=\"Forbidding suspended package\" 2>/dev/null"
                     )
                     if (proc == null) {
+                        RuntimeLog.e("logcat 进程创建失败（Shizuku 可能未连接）")
                         delay(5000)
                         continue
                     }
+                    RuntimeLog.d("logcat 进程已创建")
                     logcatProcess = proc
                     val reader = proc.inputStream.bufferedReader()
                     var line: String?
+                    var lineCount = 0
                     while (isServiceRunning && proc.isAlive) {
                         line = try { reader.readLine() } catch (_: Exception) { null }
                         if (line == null) break
+                        lineCount++
                         val pkg = parseBlockedPackage(line)
                         if (pkg != null) {
                             blockedAttemptTracker.record(pkg)
                         }
                     }
+                    RuntimeLog.d("logcat 进程已退出，共读取 $lineCount 行，运行时间=${(System.currentTimeMillis() - t) / 1000}s")
                     proc.destroy()
                     logcatProcess = null
                 } catch (_: Exception) {
@@ -286,8 +348,11 @@ class ForegroundMonitorService : Service() {
                     }
                 }
                 if (foreground != null) return foreground
-            } catch (_: SecurityException) {
-                // Usage Stats permission not granted — fall through to method 2
+                // UsageStatsManager returned null — usage stats might not be granted
+            } catch (e: SecurityException) {
+                RuntimeLog.w("UsageStatsManager 权限不足: ${e.message} → 切换至备用方案")
+            } catch (e: Exception) {
+                RuntimeLog.e("UsageStatsManager 异常: ${e.message} → 切换至备用方案")
             }
         }
 
@@ -295,9 +360,14 @@ class ForegroundMonitorService : Service() {
         return try {
             val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
             val tasks = am.runningAppProcesses?.filterNotNull() ?: emptyList()
-            tasks.firstOrNull { it.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND }
+            val foreground = tasks.firstOrNull { it.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND }
                 ?.processName
-        } catch (_: Exception) {
+            if (foreground == null) {
+                RuntimeLog.w("RunningAppProcessInfo 未能获取前台应用")
+            }
+            foreground
+        } catch (e: Exception) {
+            RuntimeLog.e("RunningAppProcessInfo 异常: ${e.message}")
             null
         }
     }
