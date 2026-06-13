@@ -105,7 +105,19 @@ class ForegroundMonitorService : Service() {
     }
 
     private fun pollForegroundApp() {
-        val foreground = getForegroundPackage() ?: return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return
+
+        val foreground = runCatching { getForegroundPackage() }
+            .onFailure { e ->
+                TriggerLogger.add(
+                    type = TriggerLogEntry.Type.ERROR,
+                    triggerPackage = null,
+                    targetPackage = "",
+                    success = false,
+                    detail = "获取前台应用失败：${e.message}"
+                )
+            }
+            .getOrNull() ?: return
 
         if (foreground != currentForeground) {
             currentForeground = foreground
@@ -256,22 +268,38 @@ class ForegroundMonitorService : Service() {
     }
 
     private fun getForegroundPackage(): String? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return null
-        val usm = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
-        val endTime = System.currentTimeMillis() + 100
-        val beginTime = endTime - POLL_INTERVAL_MS - 500
-        val events = usm.queryEvents(beginTime, endTime)
-        var foreground: String? = null
-        while (events.hasNextEvent()) {
-            val event = UsageEvents.Event()
-            events.getNextEvent(event)
-            if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
-                event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND
-            ) {
-                foreground = event.packageName
+        // Method 1: UsageStatsManager.queryEvents (requires PACKAGE_USAGE_STATS permission)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                val usm = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
+                val endTime = System.currentTimeMillis() + 100
+                val beginTime = endTime - POLL_INTERVAL_MS - 500
+                val events = usm.queryEvents(beginTime, endTime)
+                var foreground: String? = null
+                while (events.hasNextEvent()) {
+                    val event = UsageEvents.Event()
+                    events.getNextEvent(event)
+                    if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
+                        event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND
+                    ) {
+                        foreground = event.packageName
+                    }
+                }
+                if (foreground != null) return foreground
+            } catch (_: SecurityException) {
+                // Usage Stats permission not granted — fall through to method 2
             }
         }
-        return foreground
+
+        // Method 2: RunningAppProcessInfo (fallback, no special permission needed)
+        return try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val tasks = am.runningAppProcesses?.filterNotNull() ?: emptyList()
+            tasks.firstOrNull { it.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND }
+                ?.processName
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun createNotificationChannel() {
