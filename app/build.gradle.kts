@@ -12,10 +12,19 @@ android {
         applicationId = "com.example.triggerfreeze"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("release.keystore")
+            storePassword = "triggerfreeze"
+            keyAlias = "TriggerFreeze"
+            keyPassword = "triggerfreeze"
+        }
     }
 
     buildTypes {
@@ -25,6 +34,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
