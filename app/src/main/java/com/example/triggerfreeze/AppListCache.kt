@@ -39,8 +39,7 @@ object AppListCache {
                 AppInfo(
                     label = obj.getString("label"),
                     packageName = obj.getString("packageName"),
-                    isSystem = obj.optBoolean("isSystem", false),
-                    iconBitmap = null // 缓存不存图标，由后台加载补充
+                    isSystem = obj.optBoolean("isSystem", false)
                 )
             )
         }

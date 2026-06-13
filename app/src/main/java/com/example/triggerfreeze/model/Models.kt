@@ -1,27 +1,10 @@
 package com.example.triggerfreeze.model
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.drawable.Drawable
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
-
 data class AppInfo(
     val label: String,
     val packageName: String,
-    val isSystem: Boolean,
-    val iconBitmap: ImageBitmap? = null
-) {
-    companion object {
-        fun loadIcon(drawable: Drawable, sizePx: Int = 64): ImageBitmap {
-            val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bitmap)
-            drawable.setBounds(0, 0, sizePx, sizePx)
-            drawable.draw(canvas)
-            return bitmap.asImageBitmap()
-        }
-    }
-}
+    val isSystem: Boolean
+)
 
 data class TriggerLogEntry(
     val timestamp: Long,

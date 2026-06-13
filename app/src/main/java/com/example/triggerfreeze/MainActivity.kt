@@ -971,6 +971,17 @@ private fun SelectAppScreen(
                 key = { it.packageName }
             ) { app ->
                 val isSelected = app.packageName in selectedPackages
+                val context = LocalContext.current
+                val iconBitmap = remember(app.packageName) {
+                    runCatching {
+                        val drawable = context.packageManager.getApplicationIcon(app.packageName)
+                        val bitmap = android.graphics.Bitmap.createBitmap(64, 64, android.graphics.Bitmap.Config.ARGB_8888)
+                        val canvas = android.graphics.Canvas(bitmap)
+                        drawable.setBounds(0, 0, 64, 64)
+                        drawable.draw(canvas)
+                        bitmap.asImageBitmap()
+                    }.getOrNull()
+                }
                 Surface(
                     modifier = Modifier.clickable { onTogglePackage(app.packageName) },
                     shape = RoundedCornerShape(8.dp),
@@ -993,9 +1004,9 @@ private fun SelectAppScreen(
                                 onCheckedChange = { onTogglePackage(app.packageName) }
                             )
                         }
-                        if (app.iconBitmap != null) {
+                        if (iconBitmap != null) {
                             Image(
-                                bitmap = app.iconBitmap,
+                                bitmap = iconBitmap,
                                 contentDescription = app.label,
                                 modifier = Modifier.size(36.dp)
                             )
@@ -1215,8 +1226,7 @@ private fun SettingsScreen(
 private fun loadInstalledApps(context: Context): List<AppInfo> {
     val packageManager = context.packageManager
     val flags = PackageManager.ApplicationInfoFlags.of(
-        PackageManager.MATCH_DISABLED_COMPONENTS.toLong() or
-            PackageManager.MATCH_UNINSTALLED_PACKAGES.toLong()
+        PackageManager.MATCH_DISABLED_COMPONENTS.toLong()
     )
     return packageManager.getInstalledApplications(flags)
         .asSequence()
@@ -1225,10 +1235,7 @@ private fun loadInstalledApps(context: Context): List<AppInfo> {
             AppInfo(
                 label = info.loadLabel(packageManager).toString().ifBlank { info.packageName },
                 packageName = info.packageName,
-                isSystem = info.isSystemApp(),
-                iconBitmap = runCatching {
-                    AppInfo.loadIcon(packageManager.getApplicationIcon(info.packageName))
-                }.getOrNull()
+                isSystem = info.isSystemApp()
             )
         }
         .sortedWith(
